@@ -6,7 +6,8 @@
 - /blob-catfact - Learn more about cats :3
 - /blob-8ball - Just 8Ball
 - /blob-whoami - Your name and SlackID
-- Responds to pings
+- /blob-about - Info on the bot
+- Responds to pings(Note: The bot remembers only the last 50 messages for each member.)
 
 ### Installation
 1. Clone the repo
@@ -23,6 +24,7 @@
     ```bash
     SLACK_BOT_TOKEN=xoxb-your-token
     SLACK_APP_TOKEN=xapp-your-token
+    HACKCLUB_AI_KEY=your-hackclub-ai-api-key
     ```
 
 4. Run the code
@@ -35,8 +37,7 @@
 - axios
 - dotenv
 
-### Note
-This project is still a work in progress and may contain bugs or incomplete features.
+> Note: This project is still a work in progress and may contain bugs or incomplete features.
 
 ### License
 MIT
