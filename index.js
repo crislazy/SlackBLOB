@@ -28,6 +28,38 @@ app.command("/blob-catfact", async ({ command, ack, respond }) =>{
 
 });
 
+app.command("/blob-8ball", async ({ command, ack, respond }) => {
+  await ack();
+
+  const question = command.text.trim();
+  if (!question) {
+    await respond("Ask a question! Example: `/blob-8ball Will I pass my exam?`");
+    return;
+  }
+  const answers = [
+    "Yes.",
+    "No.",
+    "Maybe.",
+    "Ask again later.",
+    "Definitely!"
+  ];
+  const answer = answers[Math.floor(Math.random() * answers.length)];
+
+  await respond(`🎱 Question: ${question}\nAnswer: ${answer}`);
+});
+
+app.command("/blob-whoami", async ({ command, ack, respond, client }) =>{
+  await ack();
+
+  const slackid = command.user_id
+  const name = command.user_name
+  await respond(`
+Name: ${name}
+SlackID: ${slackid}
+  `);
+
+})
+
 app.command("/blob-help", async ({ command, ack, respond}) => {
   await ack();
 
@@ -36,6 +68,8 @@ app.command("/blob-help", async ({ command, ack, respond}) => {
     `Available Commands:
     /blob-ping - Ping and Pong
     /blob-catfact - Learn more about cats :3
+    /blob-8ball - Just 8Ball
+    /blob-whoami - Your name and SlackID
     
     Mention Responses:
     "@BLOB Hello/Hi" - "Hi @user! :3"
