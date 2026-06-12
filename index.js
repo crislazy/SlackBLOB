@@ -1,5 +1,8 @@
 require("dotenv").config();
 
+const sqlite3 = require("sqlite3").verbose();
+const db = new sqlite3.Database("chat.db");
+
 const { App } = require("@slack/bolt");
 const { default: axios } = require("axios");
 
@@ -9,6 +12,96 @@ const app = new App({
   socketMode: true
 });
 
+// Set up db
+db.run(`
+  CREATE TABLE IF NOT EXISTS memory (
+    userId TEXT PRIMARY KEY,
+    history TEXT
+  )
+`);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS channel_welcome (
+    channelId TEXT PRIMARY KEY,
+    welcomeEnabled INTEGER DEFAULT 1
+  )
+`);
+
+// Chat History
+function getHistory(userId) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      "SELECT history FROM memory WHERE userId = ?",
+      [userId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row ? JSON.parse(row.history) : []);
+      }
+    );
+  });
+}
+
+function saveHistory(userId, history) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT OR REPLACE INTO memory (userId, history)
+       VALUES (?, ?)`,
+      [userId, JSON.stringify(history)],
+      err => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+}
+
+function deleteHistory(userId) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      "DELETE FROM memory WHERE userId = ?",
+      [userId],
+      function (err) {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+}
+
+//-----------------------
+
+// Welcome Message
+function getWelcomeSetting(channelId) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      "SELECT welcomeEnabled FROM channel_welcome WHERE channelId = ?",
+      [channelId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row ? row.welcomeEnabled : 0); // default OFF
+      }
+    );
+  });
+}
+
+function setWelcomeSetting(channelId, value) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO channel_welcome (channelId, welcomeEnabled)
+       VALUES (?, ?)
+       ON CONFLICT(channelId) DO UPDATE SET welcomeEnabled = ?`,
+      [channelId, value, value],
+      err => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+}
+//-----------------------
+
+// Slash commands
+//-----PING-----
 app.command("/blob-ping", async ({ command, ack, respond }) => {
   const start = Date.now();
   await ack();
@@ -28,6 +121,7 @@ app.command("/blob-catfact", async ({ command, ack, respond }) =>{
 
 });
 
+//-----8BALL-----
 app.command("/blob-8ball", async ({ command, ack, respond }) => {
   await ack();
 
@@ -51,58 +145,50 @@ app.command("/blob-8ball", async ({ command, ack, respond }) => {
 app.command("/blob-whoami", async ({ command, ack, respond }) =>{
   await ack();
 
-  const slackid = command.user_id
+  const userId = command.user_id
   const name = command.user_name
   await respond(`
 Name: ${name}
-SlackID: ${slackid}
+SlackID: ${userId}
   `);
 
 })
 
-app.command("/blob-about", async ({ command, ack, respond }) =>{
-  await ack();
-  const uptime = process.uptime();
-  const hours = Math.floor(uptime / 3600);
-  const mins = Math.floor((uptime % 3600) / 60);
-  const secs = Math.floor(uptime % 60)
-  await respond(`
----*About*---
-Bot Uptime: ${hours}h ${mins}m ${secs}s
-Created by: <@crislzy>
-Stardance: <https://stardance.hackclub.com/projects/13469|Link>
-Github Repo: <https://github.com/crislazy/SlackBLOB|Link>
-    `)
-})
-
-app.command("/blob-help", async ({ command, ack, respond}) => {
+//-----RESET-----
+app.command("/blob-reset", async ({ command, ack, respond }) => {
   await ack();
 
-  await respond({
-    text:
-    `Available Commands:
-    /blob-ping - Ping and Pong
-    /blob-catfact - Learn more about cats :3
-    /blob-8ball - Just 8Ball
-    /blob-whoami - Your name and SlackID
-    /blob-about - Info on the bot
-    
-    Mention Responses: To talk with BLOB, just ping him and ask him something.(Note: The bot remembers only the last 50 messages for each member.)
-    The AI chatbot feature may be removed in the future.
-    `
-  })
+  const userId = command.user_id;
+
+  try {
+    await deleteHistory(userId);
+    await respond("Chat history cleared.");
+  } catch (err) {
+    console.error(err);
+    await respond("Failed to clear history.");
+  }
 });
 
-const memory = new Map();
-app.event("app_mention", async ({ event, say }) => {
-  const text = event.text
-  const userId = event.user;
+//-----TALK-----
+app.command("/blob-talk", async ({ command, ack, respond }) => {
+  await ack();
+  const allowedChannels = process.env.ALLOWED_AI.split(",");
+  const channelId = command.channel_id;
+  const text = command.text.trim();
+  const userId = command.user_id;
+  if (!allowedChannels.includes(channelId)) {
+    await respond("This channel isn't allowed to use this command.")
+    return;
+  }
+  if (!text) {
+    return respond("Usage: /blob-talk <message>");
+  }
   try {
     if (text.length > 1000) {
-      await say("Please keep messages under 1000 characters.");
+      await respond("Please keep messages under 1000 characters.");
       return;
     }
-    let history = memory.get(userId) || [];
+    let history = await getHistory(userId);
     history.push({
       role: "user",
       content: text
@@ -144,13 +230,93 @@ Keep responses short and natural like a teen in Slack.
       role: "assistant",
       content: response
     });
-    memory.set(userId, history);
-    await say(response)
+    await saveHistory(userId, history);
+    await respond(response);
   } catch(err){
     console.log(err)
-    await say("There was an error")
+    await respond("There was an error")
   }
 });
+
+//-----SETWELCOME-----
+app.command("/blob-setwelcome", async ({ command, ack, respond }) => {
+  await ack();
+  const channelId = command.channel_id;
+  const arg = command.text.trim().toLowerCase();
+
+  if (arg !== "on" && arg !== "off") {
+    return respond("Usage: /blob-welcome on|off");
+  }
+
+  const value = arg === "on" ? 1 : 0;
+
+  await setWelcomeSetting(channelId, value);
+
+  await respond(`Welcome messages are now *${arg.toUpperCase()}* in this channel.`);
+});
+
+//-----ABOUT-----
+app.command("/blob-about", async ({ command, ack, respond }) =>{
+  await ack();
+  const allowedChannels = process.env.ALLOWED_AI.split(",");
+  const channelList = allowedChannels
+    .map(id => `<#${id}>`)
+    .join(", ");
+  const uptime = process.uptime();
+  const hours = Math.floor(uptime / 3600);
+  const mins = Math.floor((uptime % 3600) / 60);
+  const secs = Math.floor(uptime % 60)
+  await respond(`
+---*About*---
+Bot Uptime: ${hours}h ${mins}m ${secs}s
+Description: BLOB is a fun bot for your channel. It includes fun commands like 8ball and catfact and usefull commands like whoami. It also features a welcome message.
+Host: *Nest*
+Created by: <@crislzy>
+---*Available Commands*---
+/blob-ping - Ping and Pong
+/blob-catfact - Learn more about cats :3
+/blob-8ball - Just 8Ball
+/blob-whoami - Your name and SlackId
+/blob-about - About this bot
+/blob-setwelcome <On/Off> - Sends a welcome messgae when a new member joins your channel.(Note: DEFAULT is Off)
+/blob-talk <message> - Talk to the AI bot (Max history of 50 messages)
+/blob-reset - Reset your chatting history with the bot
+The AI Chatbot commands only works here: ${channelList}
+
+To thank the bot, send the following message: "Thank you @BLOB"
+
+-----
+Stardance: <https://stardance.hackclub.com/projects/13469|Link>
+Github Repo: <https://github.com/crislazy/SlackBLOB|Link>
+    `)
+});
+//-----------------------
+
+// Mention Response
+app.event("app_mention", async ({ event, say }) => {
+  const text = event.text.toLowerCase()
+  const user = event.user
+  if (!text){
+    return;
+  } else if (text.includes("thank you") || text.includes("thanks")){
+    await say(`No problem <@${user}>! :3`)
+  }
+});
+//-----------------------
+
+// Join message
+app.event("member_joined_channel", async ({ event, client }) => {
+  const channelId = event.channel
+  const enabled = await getWelcomeSetting(channelId);
+
+  if (!enabled) return;
+
+  await client.chat.postMessage({
+    channel: event.channel,
+    text: `Welcome <@${event.user}> to <#${channelId}>!`
+  });
+});
+//-----------------------
 
 (async () => {
   await app.start();
